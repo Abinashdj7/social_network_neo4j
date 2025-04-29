@@ -105,29 +105,44 @@ class Database:
         return users
 
     
-    # Post operations
     def create_post(self, user_id: int, content: str) -> int:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO posts (user_id, content) VALUES (?, ?)', (user_id, content))
-            return cursor.lastrowid
-    
+        with self._driver.session() as session:
+            result = session.write_transaction(self._create_post_tx, user_id, content)
+            return result
+
+    def _create_post_tx(self, tx, user_id, content):
+        cypher_query = """
+        MATCH (u:User)
+        WHERE ID(u) = $user_id
+        CREATE (p:Post {content: $content, timestamp: datetime()})
+        CREATE (u)-[:POSTED]->(p)
+        RETURN ID(p) AS post_id
+        """
+        result = tx.run(cypher_query, user_id=user_id, content=content)
+        record = result.single()
+        return record["post_id"]
+
     def get_posts_by_user(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT p.id, p.content, p.timestamp, u.username, u.name 
-                FROM posts p JOIN users u ON p.user_id = u.id 
-                WHERE p.user_id = ?
-                ORDER BY p.timestamp DESC
-            ''', (user_id,))
-            return [{
-                'id': row[0],
-                'content': row[1],
-                'timestamp': row[2],
-                'username': row[3],
-                'name': row[4]
-            } for row in cursor.fetchall()]
+        with self._driver.session() as session:
+            result = session.read_transaction(self._get_posts_by_user_tx, user_id)
+            return result
+
+    def _get_posts_by_user_tx(self, tx, user_id):
+        cypher_query = """
+        MATCH (u:User)-[:POSTED]->(p:Post)
+        WHERE ID(u) = $user_id
+        RETURN ID(p) AS id, p.content AS content, p.timestamp AS timestamp
+        ORDER BY p.timestamp DESC
+        """
+        result = tx.run(cypher_query, user_id=user_id)
+        posts = []
+        for row in result:
+            posts.append({
+                "id": row["id"],
+                "content": row["content"],
+                "timestamp": row["timestamp"]
+            })
+        return posts
     
     def get_feed(self, user_id: int) -> List[dict]:
         with self._get_connection() as conn:
