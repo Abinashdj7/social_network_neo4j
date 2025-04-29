@@ -3,19 +3,30 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 import sqlite3
 from dataclasses import dataclass
 from typing import List, Optional
+from neo4j import GraphDatabase
 
 # ======================
 # Database Access Layer
 # ======================
 class Database:
-    def __init__(self, db_name='social_network.db'):
+    def __init__(self, uri: str = "neo4j+s://4df1e31e.databases.neo4j.io", username: str = "neo4j", password: str = "FFuV6eWpTy-qhtBfsO8Lta7JyuaGqDwySmVkjsKzLbI",db_name='social_network.db'):
+        # Connect to Neo4j database
+        self._uri = uri
+        self._username = username
+        self._password = password
+        self._driver = GraphDatabase.driver(self._uri, auth=(self._username, self._password))
         self.db_name = db_name
+        
         self._init_db()
     
+    def _get_session(self):
+        return self._driver.session()
+    
     def _init_db(self):
+        with self._get_session() as session:
+            session.run('CREATE CONSTRAINT unique_user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE')
+            session.run('CREATE CONSTRAINT unique_username IF NOT EXISTS FOR (u:User) REQUIRE u.username IS UNIQUE')
         with self._get_connection() as conn:
-            conn.execute('''CREATE CONSTRAINT unique_user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE;''')
-            conn.execute('''CREATE CONSTRAINT unique_username IF NOT EXISTS FOR (u:User) REQUIRE u.username IS UNIQUE;''')
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
