@@ -60,23 +60,50 @@ class Database:
     
     # User operations
     def create_user(self, username: str, name: str) -> int:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO users (username, name) VALUES (?, ?)', (username, name))
-            return cursor.lastrowid
+        with self._driver.session() as session:
+            result = session.write_transaction(self._create_user_tx, username, name)
+            return result
     
+    def _create_user_tx(self, tx, username, name):
+        cypher_query = """
+        CREATE (u:User {username: $username, name: $name})
+        RETURN u
+        """
+        result = tx.run(cypher_query, username=username, name=name)
+        user_node = result.single()
+        return user_node['u'].id  
+
     def get_user(self, user_id: int) -> Optional[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id, username, name FROM users WHERE id = ?', (user_id,))
-            row = cursor.fetchone()
-            return {'id': row[0], 'username': row[1], 'name': row[2]} if row else None
+        with self._driver.session() as session:
+            result = session.read_transaction(self._get_user_tx, user_id)
+            return result
+
+    def _get_user_tx(self, tx, user_id):
+        cypher_query = """
+        MATCH (u:User)
+        WHERE ID(u) = $user_id
+        RETURN u.username AS username, u.name AS name
+        """
+        result = tx.run(cypher_query, user_id=user_id)
+        user_node = result.single()
+        if user_node:
+            return {'id': user_id, 'username': user_node['username'], 'name': user_node['name']}
+        return None
     
     def get_all_users(self) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id, username, name FROM users')
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
+        with self._driver.session() as session:
+            result = session.read_transaction(self._get_all_users_tx)
+            return result
+
+    def _get_all_users_tx(self, tx):
+        cypher_query = """
+        MATCH (u:User)
+        RETURN ID(u) AS id, u.username AS username, u.name AS name
+        """
+        result = tx.run(cypher_query)
+        users = [{'id': row['id'], 'username': row['username'], 'name': row['name']} for row in result]
+        return users
+
     
     # Post operations
     def create_post(self, user_id: int, content: str) -> int:
