@@ -144,23 +144,31 @@ class Database:
             })
         return posts
     def get_feed(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT p.id, p.content, p.timestamp, u.username, u.name 
-                FROM posts p 
-                JOIN users u ON p.user_id = u.id
-                JOIN followers f ON p.user_id = f.followee_id
-                WHERE f.follower_id = ?
-                ORDER BY p.timestamp DESC
-            ''', (user_id,))
-            return [{
-                'id': row[0],
-                'content': row[1],
-                'timestamp': row[2],
-                'username': row[3],
-                'name': row[4]
-            } for row in cursor.fetchall()]
+        with self._driver.session() as session:
+            result = session.read_transaction(self._get_feed_tx, user_id)
+            return result
+
+    def _get_feed_tx(self, tx, user_id):
+    
+        cypher_query = """
+        MATCH (follower:User)-[:FOLLOWS]->(followee:User)-[:POSTED]->(p:Post)
+        WHERE ID(follower) = $user_id
+        RETURN p.id AS post_id, p.content AS content, p.timestamp AS timestamp, 
+            followee.username AS username, followee.name AS name
+        ORDER BY p.timestamp DESC
+        """
+    
+        result = tx.run(cypher_query, user_id=user_id)
+        posts = []
+        for row in result:
+            posts.append({
+                "id": row["post_id"],
+                "content": row["content"],
+                "timestamp": row["timestamp"],
+                "username": row["username"],
+                "name": row["name"]
+            })
+        return posts
     
     
     # Follow operations with Neo4j
