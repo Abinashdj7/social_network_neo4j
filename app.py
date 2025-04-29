@@ -143,7 +143,6 @@ class Database:
                 "timestamp": row["timestamp"]
             })
         return posts
-    
     def get_feed(self, user_id: int) -> List[dict]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -163,44 +162,61 @@ class Database:
                 'name': row[4]
             } for row in cursor.fetchall()]
     
-    # Follow operations
+    
+    # Follow operations with Neo4j
+
     def follow_user(self, follower_id: int, followee_id: int) -> bool:
-        with self._get_connection() as conn:
-            try:
-                conn.execute('INSERT INTO followers (follower_id, followee_id) VALUES (?, ?)', 
-                           (follower_id, followee_id))
-                return True
-            except sqlite3.IntegrityError:
-                return False
-    
-    def get_followers(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT u.id, u.username, u.name 
-                FROM followers f 
-                JOIN users u ON f.follower_id = u.id
-                WHERE f.followee_id = ?
-            ''', (user_id,))
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
-    
-    def get_following(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT u.id, u.username, u.name 
-                FROM followers f 
-                JOIN users u ON f.followee_id = u.id
-                WHERE f.follower_id = ?
-            ''', (user_id,))
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
+        with self._driver.session() as session:
+            session.write_transaction(self._follow_user_tx, follower_id, followee_id)
+            return True
+
+    def _follow_user_tx(self, tx, follower_id, followee_id):
+        cypher_query = """
+        MATCH (follower:User), (followee:User)
+        WHERE ID(follower) = $follower_id AND ID(followee) = $followee_id
+        MERGE (follower)-[:FOLLOWS]->(followee)
+        """
+        tx.run(cypher_query, follower_id=follower_id, followee_id=followee_id)
 
     def unfollow_user(self, follower_id: int, followee_id: int) -> bool:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM followers WHERE follower_id = ? AND followee_id = ?', 
-                        (follower_id, followee_id))
-            return cursor.rowcount > 0
+        with self._driver.session() as session:
+            session.write_transaction(self._unfollow_user_tx, follower_id, followee_id)
+            return True
+
+    def _unfollow_user_tx(self, tx, follower_id, followee_id):
+        cypher_query = """
+        MATCH (follower:User)-[r:FOLLOWS]->(followee:User)
+        WHERE ID(follower) = $follower_id AND ID(followee) = $followee_id
+        DELETE r
+        """
+        tx.run(cypher_query, follower_id=follower_id, followee_id=followee_id)
+
+    def get_followers(self, user_id: int) -> List[dict]:
+        with self._driver.session() as session:
+            return session.read_transaction(self._get_followers_tx, user_id)
+
+    def _get_followers_tx(self, tx, user_id):
+        cypher_query = """
+        MATCH (follower:User)-[:FOLLOWS]->(u:User)
+        WHERE ID(u) = $user_id
+        RETURN ID(follower) AS id, follower.username AS username, follower.name AS name
+        """
+        result = tx.run(cypher_query, user_id=user_id)
+        return [{'id': row['id'], 'username': row['username'], 'name': row['name']} for row in result]
+
+    def get_following(self, user_id: int) -> List[dict]:
+        with self._driver.session() as session:
+            return session.read_transaction(self._get_following_tx, user_id)
+
+    def _get_following_tx(self, tx, user_id):
+        cypher_query = """
+        MATCH (u:User)-[:FOLLOWS]->(followee:User)
+        WHERE ID(u) = $user_id
+        RETURN ID(followee) AS id, followee.username AS username, followee.name AS name
+        """
+        result = tx.run(cypher_query, user_id=user_id)
+        return [{'id': row['id'], 'username': row['username'], 'name': row['name']} for row in result]
+
 
 # ======================
 # Web Application
